@@ -1,0 +1,218 @@
+log:
+  level: info
+#  file: "/etc/mosdns/mosdns.log"
+
+api:
+  http: "0.0.0.0:9091"
+
+include: ['/etc/mosdns/dns.yaml']
+
+plugins:
+  # 国内域名
+  - tag: geosite_cn
+    type: domain_set
+    args:
+      files:
+        - "/etc/mosdns/rules/geosite_cn.txt"
+
+  # 国内 IP
+  - tag: geoip_cn
+    type: ip_set
+    args:
+      files:
+        - "/etc/mosdns/rules/geoip_cn.txt"
+
+  # 苹果域名
+  - tag: geosite_apple
+    type: domain_set
+    args:
+      files:
+        - "/etc/mosdns/rules/geosite_apple.txt"
+
+  # 国外域名
+  - tag: geosite_no_cn
+    type: domain_set
+    args:
+      files:
+        - "/etc/mosdns/rules/geosite_geolocation-!cn.txt"
+
+  - tag: hosts
+    type: hosts
+    args:
+      files:
+        - "/etc/mosdns/rules/hosts.txt"
+
+  - tag: local_ptr
+    type: domain_set
+    args:
+      files:
+        - "/etc/mosdns/rules/local-ptr.txt"
+
+  - tag: forward_udp
+    type: forward
+    args:
+      concurrent: 2
+      upstreams:
+        - addr: "223.5.5.5"
+        - addr: "119.29.29.29"
+
+  - tag: forward_local
+    type: fallback
+    args:
+      primary: ali # 主dns
+      secondary: dnspod # 备用dns
+      threshold: 500
+      always_standby: true
+
+  - tag: forward_remote
+    type: fallback
+    args:
+      primary: cloudflare # 主dns
+      secondary: google # 备用dns
+      threshold: 500
+      always_standby: true
+
+  # ECS
+  - tag: ecs_cn
+    type: "ecs_handler"
+    args:
+      forward: false # 是否转发来自下游的 ecs
+      preset: 202.38.193.28 # 发送预设 ecs | 华工IP
+      send: false # 是否发送 ecs
+      mask4: 24 # ipv4 掩码。默认 24 | 12
+      mask6: 48 # ipv6 掩码。默认 48 | 32
+
+  - tag: no_ecs
+    type: "ecs_handler"
+    args:
+      forward: false # 是否转发来自下游的 ecs
+      preset: "" # 发送预设 ecs
+      send: false # 是否发送 ecs
+      mask4: 24
+      mask6: 48 
+
+  # 国外解析
+  - tag: forward_remote_upstream
+    type: sequence
+    args:
+      - exec: $no_ecs
+      - exec: prefer_ipv4
+      - exec: query_summary forward_remote
+      - exec: $forward_remote
+
+  # 响应操作
+  - tag: has_resp_sequence
+    type: sequence
+    args:
+      - matches: has_resp
+        exec: accept
+
+  # 查询国内域名
+  # 返回非国内IP则 drop_resp
+  - tag: query_is_non_local_ip
+    type: sequence
+    args:
+      - exec: $ecs_cn
+      - exec: prefer_ipv4
+      - exec: $forward_local
+      - matches: "!resp_ip $geoip_cn"
+        exec: drop_resp
+
+  # fallback: 失败时回滚
+  # 回滚机制: 如果 primary 抛出错误，或返回但没有应答，或在 threshold 毫秒内无响应，则执行 secondary 。因无响应触发 fallback  时，如果 primary 比 secondary 先返回了应答，则依旧会采用 primary 的应答。
+  # 错误处理: 如果 primary 和 secondary 都无应答 (抛出了错误，无响应直到超时，返回了但无应答)，则抛出错误。
+  ## 此处做了防止DNS泄露的处理: 强制转发到远程DNS (摘自Github: sbwml/luci-app-mosdns)
+  - tag: fallback
+    type: fallback
+    args:
+      primary: forward_remote_upstream
+      secondary: forward_remote_upstream
+      threshold: 500
+      always_standby: true
+  # 原做法
+#  - tag: fallback
+#    type: fallback
+#    args:
+#      primary: query_is_non_local_ip
+#      secondary: forward_remote_upstream
+#      threshold: 500
+#      always_standby: true
+
+  - tag: apple_domain_fallback
+    type: fallback
+    args:
+      primary: query_is_non_local_ip
+      secondary: forward_udp
+      threshold: 100
+      always_standby: true
+
+  # 匹配苹果域名的插件
+  - tag: query_is_apple_domain
+    type: sequence
+    args:
+        - matches: qname $geosite_apple
+          exec: $apple_domain_fallback
+        - exec: query_summary apple_domain_fallback
+
+  # 匹配本地域名的插件
+  - tag: query_is_local_domain
+    type: sequence
+    args:
+      - exec: $ecs_cn
+      - exec: prefer_ipv4
+      - matches: qname $geosite_cn
+        exec: $forward_local
+      - exec: query_summary forward_local
+
+ # 查询国外域名
+  - tag: query_is_no_local_domain
+    type: sequence
+    args:
+      - matches: qname $geosite_no_cn
+        exec: $forward_remote_upstream
+
+  - tag: query_is_reject_domain
+    type: sequence
+    args:
+      - matches:
+        - qtype 12
+        - qname $local_ptr
+        exec: reject 3
+      - matches: qtype 65
+        exec: reject 3
+    
+
+
+  # 主要的运行逻辑插件
+  # sequence 插件中调用的插件 tag 必须在 sequence 前定义，
+  # 否则 sequence 找不到对应插件。
+  - tag: main_sequence
+    type: sequence
+    args:
+      - exec: $hosts
+      - exec: jump has_resp_sequence
+      - exec: forward_edns0opt 8
+      - exec: $query_is_apple_domain
+      - exec: jump has_resp_sequence
+      - exec: $query_is_reject_domain
+      - exec: jump has_resp_sequence
+      - exec: $query_is_local_domain
+      - exec: jump has_resp_sequence
+      - exec: $query_is_no_local_domain
+      - exec: jump has_resp_sequence
+      - exec: $fallback
+      - exec: jump has_resp_sequence
+
+  # 启动 udp 服务器
+  - tag: udp_server
+    type: udp_server
+    args:
+      entry: main_sequence
+      listen: ":53"
+
+  # 启动 tcp 服务器
+  - tag: tcp_server
+    type: tcp_server
+    args:
+      entry: main_sequence
+      listen: ":53"
