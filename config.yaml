@@ -94,8 +94,8 @@ plugins:
     args:
       - exec: prefer_ipv4
       - exec: $forward_local
-      - matches: "!resp_ip $geoip_cn"
-        exec: drop_resp
+      # - matches: "!resp_ip $geoip_cn"
+      #   exec: drop_resp
 
   # fallback: 失败时回滚
   # 回滚机制: 如果 primary 抛出错误，或返回但没有应答，或在 threshold 毫秒内无响应，则执行 secondary 。因无响应触发 fallback  时，如果 primary 比 secondary 先返回了应答，则依旧会采用 primary 的应答。
@@ -129,9 +129,9 @@ plugins:
   - tag: query_is_apple_domain
     type: sequence
     args:
-        - matches: qname $geosite_apple
-          exec: $apple_domain_fallback
-        - exec: query_summary apple_domain_fallback
+      - matches: qname $geosite_apple
+        exec: $apple_domain_fallback
+      - exec: query_summary apple_domain_fallback
 
   # 匹配本地域名的插件
   - tag: query_is_local_domain
