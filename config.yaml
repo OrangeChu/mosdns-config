@@ -3,7 +3,7 @@ log:
 #  file: "/etc/mosdns/mosdns.log"
 
 api:
-  http: "0.0.0.0:9091"
+  http: "0.0.0.0:5534"
 
 include: ['/etc/mosdns/dns.yaml']
 
@@ -72,10 +72,28 @@ plugins:
       threshold: 500
       always_standby: true
 
+  # ECS
+  - tag: ecs_cn
+    type: "ecs_handler"
+    args:
+      forward: true # 是否转发来自下游的 ecs
+      mask4: 24 # ipv4 掩码。默认 24 | 12
+      mask6: 48 # ipv6 掩码。默认 48 | 32
+
+  - tag: no_ecs
+    type: "ecs_handler"
+    args:
+      forward: false # 是否转发来自下游的 ecs
+      preset: "" # 发送预设 ecs
+      send: false # 是否发送 ecs
+      mask4: 24
+      mask6: 48
+
   # 国外解析
   - tag: forward_remote_upstream
     type: sequence
     args:
+      - exec: $no_ecs
       - exec: prefer_ipv4
       - exec: query_summary forward_remote
       - exec: $forward_remote
@@ -92,10 +110,11 @@ plugins:
   - tag: query_is_non_local_ip
     type: sequence
     args:
+      - exec: $ecs_cn
       - exec: prefer_ipv4
       - exec: $forward_local
-      # - matches: "!resp_ip $geoip_cn"
-      #   exec: drop_resp
+      - matches: "!resp_ip $geoip_cn"
+        exec: drop_resp
 
   # fallback: 失败时回滚
   # 回滚机制: 如果 primary 抛出错误，或返回但没有应答，或在 threshold 毫秒内无响应，则执行 secondary 。因无响应触发 fallback  时，如果 primary 比 secondary 先返回了应答，则依旧会采用 primary 的应答。
@@ -129,14 +148,15 @@ plugins:
   - tag: query_is_apple_domain
     type: sequence
     args:
-      - matches: qname $geosite_apple
-        exec: $apple_domain_fallback
-      - exec: query_summary apple_domain_fallback
+        - matches: qname $geosite_apple
+          exec: $apple_domain_fallback
+        - exec: query_summary apple_domain_fallback
 
   # 匹配本地域名的插件
   - tag: query_is_local_domain
     type: sequence
     args:
+      - exec: $ecs_cn
       - exec: prefer_ipv4
       - matches: qname $geosite_cn
         exec: $forward_local
@@ -159,6 +179,7 @@ plugins:
       - matches: qtype 65
         exec: reject 3
     
+
 
   # 主要的运行逻辑插件
   # sequence 插件中调用的插件 tag 必须在 sequence 前定义，
