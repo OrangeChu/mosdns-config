@@ -48,13 +48,14 @@ plugins:
       files:
         - "/etc/mosdns/rules/local-ptr.txt"
 
-  - tag: forward_udp
+  - tag: forward_dns
     type: forward
     args:
-      concurrent: 2
+      concurrent: 1
       upstreams:
-        - addr: "223.5.5.5"
-        - addr: "119.29.29.29"
+        - addr: "tls://dns.alidns.com"
+          dial_addr: "223.6.6.6"
+          enable_pipeline: false
 
   - tag: forward_local
     type: fallback
@@ -76,7 +77,9 @@ plugins:
   - tag: ecs_cn
     type: "ecs_handler"
     args:
-      forward: true # 是否转发来自下游的 ecs
+      forward: false # 是否转发来自下游的 ecs
+      preset: 218.85.152.99 # 发送预设 ecs
+      send: false # 是否发送 ecs
       mask4: 24 # ipv4 掩码。默认 24 | 12
       mask6: 48 # ipv6 掩码。默认 48 | 32
 
@@ -87,7 +90,7 @@ plugins:
       preset: "" # 发送预设 ecs
       send: false # 是否发送 ecs
       mask4: 24
-      mask6: 48
+      mask6: 48 
 
   # 国外解析
   - tag: forward_remote_upstream
@@ -95,7 +98,7 @@ plugins:
     args:
       - exec: $no_ecs
       - exec: prefer_ipv4
-      - exec: query_summary forward_remote
+      # - exec: query_summary forward_remote
       - exec: $forward_remote
 
   # 响应操作
@@ -140,8 +143,8 @@ plugins:
     type: fallback
     args:
       primary: query_is_non_local_ip
-      secondary: forward_udp
-      threshold: 100
+      secondary: forward_dns
+      threshold: 500
       always_standby: true
 
   # 匹配苹果域名的插件
@@ -150,7 +153,7 @@ plugins:
     args:
         - matches: qname $geosite_apple
           exec: $apple_domain_fallback
-        - exec: query_summary apple_domain_fallback
+        # - exec: query_summary apple_domain_fallback
 
   # 匹配本地域名的插件
   - tag: query_is_local_domain
@@ -160,7 +163,7 @@ plugins:
       - exec: prefer_ipv4
       - matches: qname $geosite_cn
         exec: $forward_local
-      - exec: query_summary forward_local
+      # - exec: query_summary forward_local
 
  # 查询国外域名
   - tag: query_is_no_local_domain
